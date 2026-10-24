@@ -42,6 +42,8 @@ export const defaultSettings: Settings = {
   viewMode: prefersFilledViewport() ? "fill" : "fit",
   viewOnly: false,
   menuHidden: prefersFilledViewport(),
+  audioEnabled: false,
+  audioDelay: 120,
 };
 
 function clamp(value: unknown, min: number, max: number, fallback: number): number {
@@ -75,6 +77,8 @@ export function loadSettings(): Settings {
         : typeof raw.menuHidden === "boolean"
           ? raw.menuHidden
           : defaultSettings.menuHidden,
+      audioEnabled: typeof raw.audioEnabled === "boolean" ? raw.audioEnabled : defaultSettings.audioEnabled,
+      audioDelay: clamp(raw.audioDelay, 40, 500, defaultSettings.audioDelay),
     };
   } catch {
     return { ...defaultSettings };

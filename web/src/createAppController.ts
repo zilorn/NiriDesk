@@ -1,17 +1,20 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
 import { createStore } from "solid-js/store";
 import { api, ApiError, errorMessage, isUnauthorized } from "./lib/api";
+import { RemoteAudio } from "./lib/audio";
 import { installFillViewport, remoteFramebufferSize } from "./lib/fillViewport";
 import type { FillViewport } from "./lib/fillViewport";
 import { MODIFIER_KEYS, SPECIAL_KEYS, keysymForCharacter } from "./lib/keys";
 import type { ModifierName, SpecialName } from "./lib/keys";
 import { loadSettings, saveSettings } from "./lib/settings";
 import type {
+  AudioState,
   AuthState,
   ConnectionState,
   InstallPromptEvent,
   OutputInfo,
   OverlayState,
+  PrivacyState,
   RfbClient,
   RfbConstructor,
   Settings,
@@ -55,11 +58,15 @@ export function createAppController() {
   const [fullscreen, setFullscreen] = createSignal(false);
   const [installPrompt, setInstallPrompt] = createSignal<InstallPromptEvent | null>(null);
   const [switchingOutput, setSwitchingOutput] = createSignal<string | null>(null);
+  const [audioState, setAudioState] = createSignal<AudioState>("idle");
+  const [audioError, setAudioError] = createSignal("");
+  const [privacyPending, setPrivacyPending] = createSignal(false);
 
   let screenEl: HTMLElement | null = null;
   let keyboardEl: HTMLInputElement | null = null;
   let rfb: RfbClient | null = null;
   let fillViewport: FillViewport | null = null;
+  let remoteAudio: RemoteAudio | null = null;
   let generation = 0;
   let statusTimer: number | undefined;
   let wakeLock: WakeLockLike | null = null;
@@ -68,6 +75,18 @@ export function createAppController() {
 
   const outputs = (): OutputInfo[] => status()?.outputs ?? [];
   const currentOutput = (): OutputInfo | null => outputs().find((output) => output.captured) ?? null;
+  const audioActive = () => audioState() === "playing" || audioState() === "starting";
+  const audioAvailable = () => Boolean(status()?.audio.enabled && status()?.audio.available);
+  const privacyEnabled = () => status()?.privacy.enabled ?? false;
+  const privacySupported = () => status()?.privacy.supported ?? false;
+  const audioLabel = () => {
+    switch (audioState()) {
+      case "playing": return "声音已开启";
+      case "starting": return "正在连接声音";
+      case "error": return "声音不可用";
+      default: return "开启声音";
+    }
+  };
   const buildLabel = () => {
     const current = status();
     const build = current?.version || version();
@@ -173,6 +192,7 @@ export function createAppController() {
     setStatus(null);
     setSheet(null);
     setClipboard("");
+    closeAudio();
     document.title = "NiriDesk · niri 远程桌面";
     try {
       await api("/api/logout", { method: "POST" });
@@ -191,6 +211,7 @@ export function createAppController() {
     setConnection("idle");
     setStatus(null);
     setSheet(null);
+    closeAudio();
     document.title = "NiriDesk · niri 远程桌面";
   }
 
@@ -215,6 +236,7 @@ export function createAppController() {
     setSheet(null);
     setOverlay(null);
     clearModifiers();
+    closeAudio();
     void releaseWakeLock();
   }
 
@@ -320,6 +342,7 @@ export function createAppController() {
       void requestWakeLock();
       if (!window.matchMedia("(pointer: coarse)").matches && !settings.viewOnly) instance.focus();
       toast("已连接到 niri 桌面");
+      if (settings.audioEnabled) void startAudio(true);
     });
 
     instance.addEventListener("disconnect", (event) => {
@@ -327,6 +350,7 @@ export function createAppController() {
       rfb = null;
       fillViewport = null;
       clearModifiers();
+      closeAudio();
       void releaseWakeLock();
       setConnection("error");
       setResolution("—");
@@ -390,6 +414,7 @@ export function createAppController() {
       }
     }
     clearModifiers();
+    closeAudio();
     void releaseWakeLock();
     setResolution("—");
     setConnection("idle");
@@ -464,6 +489,108 @@ export function createAppController() {
     const compression = Math.min(9, Math.max(0, Math.round(value)));
     updateSetting("compression", compression);
     if (rfb) rfb.compressionLevel = compression;
+  }
+
+  function closeAudio(): void {
+    const instance = remoteAudio;
+    remoteAudio = null;
+    instance?.stop();
+    setAudioState("idle");
+    setAudioError("");
+  }
+
+  async function startAudio(auto = false): Promise<void> {
+    if (remoteAudio) return;
+    if (connection() !== "connected") {
+      if (!auto) toast("请先连接桌面", "error");
+      return;
+    }
+    const info = status()?.audio;
+    if (info && (!info.enabled || !info.available)) {
+      setAudioState("error");
+      setAudioError(info.error || "服务端没有可用的音频采集");
+      if (!auto) toast(info.error || "服务端没有可用的音频采集", "error");
+      return;
+    }
+
+    setAudioError("");
+    let instance: RemoteAudio;
+    instance = new RemoteAudio(settings.audioDelay, (state, detail) => {
+      setAudioState(state);
+      if (state === "error") {
+        setAudioError(detail || "音频连接已断开");
+        if (remoteAudio === instance) remoteAudio = null;
+      } else if (state === "playing") {
+        setAudioError("");
+      }
+    });
+    remoteAudio = instance;
+    try {
+      await instance.start();
+    } catch (error) {
+      if (remoteAudio === instance) remoteAudio = null;
+      instance.stop();
+      const message = error instanceof Error ? error.message : "无法开启音频";
+      setAudioState("error");
+      setAudioError(message);
+      updateSetting("audioEnabled", false);
+      if (!auto) toast(message, "error");
+    }
+  }
+
+  async function toggleAudio(): Promise<void> {
+    if (audioActive()) {
+      closeAudio();
+      updateSetting("audioEnabled", false);
+      toast("声音已关闭");
+      return;
+    }
+    if (connection() !== "connected") {
+      toast("请先连接桌面", "error");
+      return;
+    }
+    if (!audioAvailable()) {
+      toast(status()?.audio.error || "服务端没有可用的音频采集", "error");
+      return;
+    }
+    updateSetting("audioEnabled", true);
+    await startAudio(false);
+  }
+
+  function setAudioDelay(value: number): void {
+    const delay = Math.min(500, Math.max(40, Math.round(value)));
+    updateSetting("audioDelay", delay);
+    remoteAudio?.setDelay(delay);
+  }
+
+  async function setPrivacy(enabled: boolean): Promise<void> {
+    if (privacyPending()) return;
+    if (!privacySupported()) {
+      toast("当前环境不支持防窥模式", "error");
+      return;
+    }
+    setPrivacyPending(true);
+    try {
+      const state = await api<PrivacyState>("/api/privacy", {
+        method: "POST",
+        body: { enabled },
+      });
+      const current = status();
+      if (current) setStatus({ ...current, privacy: state });
+      if (enabled) {
+        toast("防窥模式已开启，物理显示器已全黑");
+      } else {
+        toast("防窥模式已关闭，显示器已恢复");
+      }
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        expireSession();
+      } else {
+        toast(errorMessage(error), "error");
+      }
+    } finally {
+      setPrivacyPending(false);
+    }
   }
 
   function viewModeLabel(mode: ViewMode = settings.viewMode): string {
@@ -779,6 +906,14 @@ export function createAppController() {
     fullscreen,
     installPrompt,
     switchingOutput,
+    audioState,
+    audioError,
+    audioActive,
+    audioAvailable,
+    audioLabel,
+    privacyEnabled,
+    privacySupported,
+    privacyPending,
     buildLabel,
     login,
     logout,
@@ -794,6 +929,9 @@ export function createAppController() {
     refreshStatus,
     setQuality,
     setCompression,
+    toggleAudio,
+    setAudioDelay,
+    setPrivacy,
     viewModeLabel,
     setViewMode,
     cycleViewMode,

@@ -34,6 +34,36 @@ export function SettingsSheet() {
     return state.running ? `运行中${version}` : `未运行${version}`;
   };
 
+  const audioLine = (): StatusLine => {
+    const current = app.status();
+    if (!current) return { text: "正在读取音频状态…", mode: "warn" };
+    if (!current.audio.enabled) return { text: "服务端已关闭音频采集", mode: "warn" };
+    if (!current.audio.available) {
+      return { text: current.audio.error || "音频采集不可用，请检查 PulseAudio/PipeWire 与 parec", mode: "bad" };
+    }
+    switch (app.audioState()) {
+      case "playing": return { text: "正在播放远端系统声音 · 48 kHz 立体声", mode: "ok" };
+      case "starting": return { text: "正在建立音频通道…", mode: "warn" };
+      case "error": return { text: app.audioError() || "音频连接异常", mode: "bad" };
+      default: return { text: "声音未开启，点按开关播放远端音频", mode: "warn" };
+    }
+  };
+
+  const privacyLine = (): StatusLine => {
+    const current = app.status();
+    if (!current) return { text: "正在读取防窥状态…", mode: "warn" };
+    if (!current.privacy.supported) {
+      return { text: current.privacy.last_error || "当前合成器不支持 Wayland gamma control，无法启用防窥模式", mode: "warn" };
+    }
+    if (current.privacy.last_error) {
+      return { text: current.privacy.last_error, mode: "bad" };
+    }
+    if (current.privacy.enabled) {
+      return { text: "防窥模式已开启：物理显示器已全黑，远程画面继续传输", mode: "ok" };
+    }
+    return { text: "防窥模式已关闭", mode: "warn" };
+  };
+
   const statusLines = (): StatusLine[] => {
     const current = app.status();
     if (!current) return [{ text: "正在读取服务状态…", mode: "warn" }];
@@ -174,6 +204,76 @@ export function SettingsSheet() {
               <span class="switch-track" />
             </span>
           </label>
+        </section>
+
+        <section class="settings-section">
+          <h3>声音</h3>
+          <label class="setting-row">
+            <span class="setting-copy">
+              <span>同步远端音频</span>
+              <p>播放 niri 会话的系统声音；需要点击开关以通过浏览器的自动播放限制。</p>
+            </span>
+            <span class="switch">
+              <input
+                type="checkbox"
+                checked={app.audioActive()}
+                disabled={app.audioState() === "starting" || app.connection() !== "connected" || (!app.audioActive() && !app.audioAvailable())}
+                onChange={() => void app.toggleAudio()}
+              />
+              <span class="switch-track" />
+            </span>
+          </label>
+          <div class="setting-row setting-row-stack">
+            <div class="setting-copy">
+              <label for="audio-delay">音画同步延迟</label>
+              <p>声音在网络中先缓冲再播放。若口型落后于画面，增大延迟；数值越低延迟越小。</p>
+            </div>
+            <div class="range-row">
+              <input
+                id="audio-delay"
+                class="range"
+                type="range"
+                min="40"
+                max="500"
+                step="10"
+                value={app.settings.audioDelay}
+                onInput={(event) => app.setAudioDelay(Number(event.currentTarget.value))}
+              />
+              <output class="range-value" for="audio-delay">{app.settings.audioDelay} ms</output>
+            </div>
+          </div>
+          <div class="status-lines">
+            <div class={`status-line ${audioLine().mode}`}>
+              <span class="status-dot" />
+              <span>{audioLine().text}</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>隐私</h3>
+          <label class="setting-row">
+            <span class="setting-copy">
+              <span>防窥模式</span>
+              <p>远程操作期间关闭物理显示器。最后一个远程画面会话断开、关闭此开关或服务退出时自动恢复。</p>
+            </span>
+            <span class="switch">
+              <input
+                type="checkbox"
+                checked={app.privacyEnabled()}
+                disabled={!app.privacySupported() || app.privacyPending()}
+                onChange={(event) => void app.setPrivacy(event.currentTarget.checked)}
+              />
+              <span class="switch-track" />
+            </span>
+          </label>
+          <div class="status-lines">
+            <div class={`status-line ${privacyLine().mode}`}>
+              <span class="status-dot" />
+              <span>{privacyLine().text}</span>
+            </div>
+          </div>
+          <p class="setting-note">防窥通过 Wayland gamma control 将物理输出压成全黑，screencopy 仍取得正常画面；远程键鼠不会唤醒或恢复显示内容。关闭开关、最后一个远程画面会话断开或服务退出时会恢复。需要合成器支持 wlr-gamma-control。</p>
         </section>
 
         <section class="settings-section">

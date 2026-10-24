@@ -105,7 +105,24 @@ export function RemoteView() {
             <span>{app.connectionLabel()}</span>
           </div>
 
+          <Show when={app.privacyEnabled()}>
+            <div class="privacy-pill" title="防窥模式：物理显示器已全黑">
+              <Icon name="shield" />
+              <span>防窥</span>
+            </div>
+          </Show>
+
           <div class="top-actions">
+            <button
+              class={`icon-button desktop-action${app.audioActive() ? " active" : ""}`}
+              type="button"
+              aria-label={app.audioLabel()}
+              aria-pressed={app.audioActive()}
+              title={app.audioLabel()}
+              onClick={() => void app.toggleAudio()}
+            >
+              <Icon name={app.audioActive() ? "volume" : "volume-off"} />
+            </button>
             <button class="icon-button desktop-action" type="button" aria-label="键盘" title="键盘" onClick={app.toggleKeyboard}>
               <Icon name="keyboard" />
             </button>
@@ -198,6 +215,15 @@ export function RemoteView() {
             onClick={app.cycleViewMode}
           >
             <Icon name="fit" /><span>{app.viewModeLabel()}</span>
+          </button>
+          <button
+            class={`tool-button${app.audioActive() ? " active" : ""}`}
+            type="button"
+            aria-pressed={app.audioActive()}
+            aria-label={app.audioLabel()}
+            onClick={() => void app.toggleAudio()}
+          >
+            <Icon name={app.audioActive() ? "volume" : "volume-off"} /><span>声音</span>
           </button>
           <button class="tool-button" type="button" onClick={() => app.openSheet("clipboard")}>
             <Icon name="clipboard" /><span>剪贴板</span>

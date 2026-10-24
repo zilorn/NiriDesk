@@ -6,12 +6,16 @@ export type SheetName = "settings" | "clipboard" | null;
 
 export type ViewMode = "fit" | "fill" | "actual";
 
+export type AudioState = "idle" | "starting" | "playing" | "error";
+
 export interface Settings {
   quality: number;
   compression: number;
   viewMode: ViewMode;
   viewOnly: boolean;
   menuHidden: boolean;
+  audioEnabled: boolean;
+  audioDelay: number;
 }
 
 export interface OutputInfo {
@@ -43,6 +47,19 @@ export interface WaylandStatus {
   socket_present: boolean;
 }
 
+export interface AudioStatus {
+  enabled: boolean;
+  available: boolean;
+  active_clients: number;
+  error?: string;
+}
+
+export interface PrivacyState {
+  enabled: boolean;
+  supported: boolean;
+  last_error?: string;
+}
+
 export interface StatusResponse {
   version: string;
   commit: string;
@@ -54,6 +71,8 @@ export interface StatusResponse {
   active_clients: number;
   max_clients: number;
   max_fps: number;
+  audio: AudioStatus;
+  privacy: PrivacyState;
 }
 
 export interface OverlayState {
