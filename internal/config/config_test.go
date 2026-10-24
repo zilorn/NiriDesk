@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func clearConfigEnv(t *testing.T) {
 		"TLS_KEY_FILE", "TRUST_PROXY", "COOKIE_SECURE", "MAX_CLIENTS", "LOG_LEVEL",
 		"WAYVNC_MANAGED", "WAYVNC_BIN", "WAYVNCCTL_BIN", "WAYVNC_CONTROL_SOCKET",
 		"WAYVNC_OUTPUT", "WAYVNC_MAX_FPS", "WAYVNC_SHOW_CURSOR", "WAYVNC_DISABLE_INPUT",
-		"WAYVNC_LOG_LEVEL",
+		"WAYVNC_LOG_LEVEL", "AUDIO_ENABLED", "AUDIO_BINARY", "AUDIO_DEVICE",
 	}
 	for _, name := range names {
 		t.Setenv(name, "")
@@ -43,6 +44,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.SessionTTL == 0 {
 		t.Fatal("expected a session TTL")
+	}
+	if !cfg.Audio.Enabled || cfg.Audio.Binary != "parec" || cfg.Audio.Device != "@DEFAULT_MONITOR@" {
+		t.Fatalf("unexpected audio defaults: %+v", cfg.Audio)
 	}
 }
 
@@ -111,5 +115,30 @@ func TestLoadValidation(t *testing.T) {
 	t.Setenv("COOKIE_SECURE", "sometimes")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected an invalid cookie mode to fail")
+	}
+
+	clearConfigEnv(t)
+	t.Setenv("REMOTE_PASSWORD", "long-enough-password")
+	t.Setenv("AUDIO_ENABLED", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an invalid audio switch to fail")
+	}
+
+	clearConfigEnv(t)
+	t.Setenv("REMOTE_PASSWORD", "long-enough-password")
+	t.Setenv("AUDIO_DEVICE", strings.Repeat("device", 50))
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an invalid audio device to fail")
+	}
+
+	clearConfigEnv(t)
+	t.Setenv("REMOTE_PASSWORD", "long-enough-password")
+	t.Setenv("AUDIO_ENABLED", "false")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load without audio: %v", err)
+	}
+	if cfg.Audio.Enabled {
+		t.Fatal("expected audio to be disabled")
 	}
 }

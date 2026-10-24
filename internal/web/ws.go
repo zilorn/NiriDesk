@@ -66,12 +66,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		"active_clients", s.activeClient.Load(),
 	)
 	defer func() {
-		s.activeClient.Add(-1)
+		remaining := s.activeClient.Add(-1)
 		s.logger.Info("remote session closed",
 			"client", s.clientIP(r),
 			"duration_ms", time.Since(started).Milliseconds(),
-			"active_clients", s.activeClient.Load(),
+			"active_clients", remaining,
 		)
+		if remaining == 0 {
+			go s.restorePrivacyWhenIdle()
+		}
 	}()
 
 	runProxy(wsConn, vncConn)

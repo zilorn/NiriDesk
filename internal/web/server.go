@@ -18,11 +18,13 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/zilorn/niridesk/internal/auth"
 	"github.com/zilorn/niridesk/internal/config"
+	"github.com/zilorn/niridesk/internal/privacy"
 	"github.com/zilorn/niridesk/internal/wayvnc"
 	webassets "github.com/zilorn/niridesk/web"
 )
@@ -42,20 +44,33 @@ type WayvncController interface {
 	SetOutput(context.Context, string) error
 }
 
+// PrivacyController is the compositor surface used by the anti-peek mode.
+type PrivacyController interface {
+	State() privacy.State
+	Enable(context.Context) error
+	Disable(context.Context) error
+	Close()
+}
+
 // Server implements the authenticated HTTP and WebSocket API.
 type Server struct {
 	cfg     config.Config
 	auth    *auth.Manager
 	limiter *auth.Limiter
 	wayvnc  WayvncController
+	privacy PrivacyController
 	build   BuildInfo
 	logger  *slog.Logger
 
-	staticFS     fs.FS
-	mux          *http.ServeMux
-	clientSlots  chan struct{}
-	startedAt    time.Time
-	activeClient atomic.Int64
+	staticFS       fs.FS
+	mux            *http.ServeMux
+	clientSlots    chan struct{}
+	audioSlots     chan struct{}
+	startedAt      time.Time
+	activeClient   atomic.Int64
+	audioActive    atomic.Int64
+	audioErrMu     sync.RWMutex
+	audioLastError string
 }
 
 // New builds the HTTP handler with the embedded frontend build.
@@ -75,11 +90,13 @@ func newServer(cfg config.Config, controller WayvncController, build BuildInfo, 
 		auth:        auth.New(cfg.Password, cfg.SessionSecret, cfg.SessionTTL),
 		limiter:     auth.NewLimiter(5, 15*time.Minute, 5*time.Minute),
 		wayvnc:      controller,
+		privacy:     privacy.NewController(logger),
 		build:       build,
 		logger:      logger,
 		staticFS:    staticFS,
 		startedAt:   time.Now(),
 		clientSlots: make(chan struct{}, cfg.MaxClients),
+		audioSlots:  make(chan struct{}, cfg.MaxClients),
 	}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -87,8 +104,10 @@ func newServer(cfg config.Config, controller WayvncController, build BuildInfo, 
 	s.mux.HandleFunc("GET /api/session", s.handleSession)
 	s.mux.HandleFunc("GET /api/status", s.handleStatus)
 	s.mux.HandleFunc("POST /api/output", s.handleOutput)
+	s.mux.HandleFunc("POST /api/privacy", s.handlePrivacy)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /websocket", s.handleWebSocket)
+	s.mux.HandleFunc("GET /audio", s.handleAudioWebSocket)
 	s.mux.HandleFunc("/", s.handleStatic)
 	return s
 }
@@ -227,6 +246,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ActiveClients: int(s.activeClient.Load()),
 		MaxClients:    s.cfg.MaxClients,
 		MaxFPS:        s.cfg.Wayvnc.MaxFPS,
+		Audio:         s.audioStatus(),
+		Privacy:       s.privacy.State(),
 	}
 	if outputErr != nil {
 		response.OutputError = outputErr.Error()
@@ -245,6 +266,8 @@ type statusResponse struct {
 	ActiveClients int             `json:"active_clients"`
 	MaxClients    int             `json:"max_clients"`
 	MaxFPS        int             `json:"max_fps"`
+	Audio         audioStatus     `json:"audio"`
+	Privacy       privacy.State   `json:"privacy"`
 }
 
 type vncStatus struct {
@@ -293,6 +316,66 @@ func (s *Server) handleOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Info("capture output changed", "output", request.Name, "client", s.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"outputs": outputs})
+}
+
+type privacyRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) handlePrivacy(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.originAllowed(r, false) {
+		writeError(w, http.StatusForbidden, "origin_not_allowed")
+		return
+	}
+	var request privacyRequest
+	if err := decodeJSON(w, r, &request, 1024); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var err error
+	if request.Enabled {
+		err = s.privacy.Enable(ctx)
+	} else {
+		err = s.privacy.Disable(ctx)
+	}
+	if err != nil {
+		s.logger.Warn("anti-peek mode change failed", "enabled", request.Enabled, "error", err)
+		writeError(w, http.StatusBadGateway, "privacy_unavailable")
+		return
+	}
+	state := s.privacy.State()
+	s.logger.Info("anti-peek mode changed", "enabled", state.Enabled, "client", s.clientIP(r))
+	writeJSON(w, http.StatusOK, state)
+}
+
+// Close restores physical monitors when the process shuts down.
+func (s *Server) Close() {
+	if s.privacy != nil {
+		s.privacy.Close()
+	}
+}
+
+// restorePrivacyWhenIdle restores monitors after the last remote canvas closes.
+// Anti-peek is a session-scoped control; leaving physical monitors dark with no
+// viewer would be surprising and hard to undo without local input.
+func (s *Server) restorePrivacyWhenIdle() {
+	if s.activeClient.Load() != 0 {
+		return
+	}
+	if !s.privacy.State().Enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.privacy.Disable(ctx); err != nil {
+		s.logger.Warn("failed to restore monitors after last session", "error", err)
+	}
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {

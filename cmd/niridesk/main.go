@@ -64,6 +64,7 @@ func main() {
 	manager.Start(ctx)
 
 	handler := web.New(cfg, manager, web.BuildInfo{Version: version, Commit: commit}, logger)
+	defer handler.Close()
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           handler,
@@ -112,6 +113,7 @@ func main() {
 		logger.Warn("wayvnc did not stop before shutdown deadline")
 	}
 	if exitCode != 0 {
+		handler.Close()
 		os.Exit(exitCode)
 	}
 }

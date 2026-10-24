@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +21,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/zilorn/niridesk/internal/audio"
 	"github.com/zilorn/niridesk/internal/config"
+	"github.com/zilorn/niridesk/internal/privacy"
 	"github.com/zilorn/niridesk/internal/wayvnc"
 )
 
@@ -63,7 +68,45 @@ func testConfig(vncAddress string) config.Config {
 			Managed: true,
 			MaxFPS:  30,
 		},
+		Audio: config.Audio{Enabled: false},
 	}
+}
+
+type fakePrivacy struct {
+	mu    sync.Mutex
+	state privacy.State
+}
+
+func (f *fakePrivacy) State() privacy.State {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.state
+}
+
+func (f *fakePrivacy) Enable(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state.Enabled = true
+	f.state.LastError = ""
+	return nil
+}
+
+func (f *fakePrivacy) Disable(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state.Enabled = false
+	f.state.LastError = ""
+	return nil
+}
+
+func (f *fakePrivacy) Close() {
+	_ = f.Disable(context.Background())
+}
+
+func (f *fakePrivacy) enabled() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.state.Enabled
 }
 
 func testHandler(t *testing.T, vncAddress string) (*Server, *fakeController) {
@@ -77,6 +120,7 @@ func testHandler(t *testing.T, vncAddress string) (*Server, *fakeController) {
 		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>NiriDesk test</title>")},
 	}
 	server := newServer(testConfig(vncAddress), controller, BuildInfo{Version: "test", Commit: "abcdef1"}, logger, assets)
+	server.privacy = &fakePrivacy{state: privacy.State{Supported: true}}
 	return server, controller
 }
 
@@ -310,6 +354,143 @@ func TestWebSocketRequiresAuthAndOrigin(t *testing.T) {
 	}
 	if response == nil || response.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %+v", response)
+	}
+}
+
+func TestAudioWebSocketStreamsFrames(t *testing.T) {
+	server, _ := testHandler(t, "127.0.0.1:1")
+	capture := filepath.Join(t.TempDir(), "parec")
+	if err := os.WriteFile(capture, []byte("#!/bin/sh\nhead -c 7680 /dev/zero\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server.cfg.Audio = config.Audio{Enabled: true, Binary: capture, Device: "@DEFAULT_MONITOR@"}
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	client, response := loginClient(t, ts, "test-password")
+	response.Body.Close()
+	cookies := client.Jar.Cookies(mustURL(t, ts.URL))
+	header := http.Header{}
+	header.Set("Cookie", cookies[0].Name+"="+cookies[0].Value)
+	header.Set("Origin", ts.URL)
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/audio"
+	conn, upgradeResponse, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		if upgradeResponse != nil {
+			raw, _ := io.ReadAll(upgradeResponse.Body)
+			t.Fatalf("audio dial: %v (%d %s)", err, upgradeResponse.StatusCode, raw)
+		}
+		t.Fatalf("audio dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messageType != websocket.BinaryMessage {
+		t.Fatalf("unexpected audio message type: %d", messageType)
+	}
+	if len(payload) != audioFrameHeaderSize+audio.FrameBytes {
+		t.Fatalf("unexpected audio frame length: %d", len(payload))
+	}
+	if string(payload[:4]) != string(audioFrameMagic[:]) || payload[4] != audioProtocolVersion || payload[5] != audioFormatS16LE {
+		t.Fatalf("unexpected audio header: %x", payload[:6])
+	}
+	if binary.LittleEndian.Uint32(payload[8:12]) != audio.SampleRate || binary.LittleEndian.Uint16(payload[6:8]) != audio.Channels {
+		t.Fatal("unexpected audio format")
+	}
+	if binary.LittleEndian.Uint64(payload[12:20]) == 0 {
+		t.Fatal("expected a capture timestamp")
+	}
+}
+
+func TestAudioWebSocketRequiresAuthAndOrigin(t *testing.T) {
+	server, _ := testHandler(t, "127.0.0.1:1")
+	server.cfg.Audio = config.Audio{Enabled: true, Binary: "/bin/true", Device: "@DEFAULT_MONITOR@"}
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/audio"
+
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		conn.Close()
+		t.Fatal("expected unauthenticated audio websocket to fail")
+	}
+	if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %+v", response)
+	}
+
+	client, login := loginClient(t, ts, "test-password")
+	login.Body.Close()
+	cookies := client.Jar.Cookies(mustURL(t, ts.URL))
+	header := http.Header{}
+	header.Set("Cookie", cookies[0].Name+"="+cookies[0].Value)
+	conn, response, err = websocket.DefaultDialer.Dial(wsURL, header)
+	if err == nil {
+		conn.Close()
+		t.Fatal("expected audio websocket without Origin to fail")
+	}
+	if response == nil || response.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %+v", response)
+	}
+}
+
+func TestPrivacyModeToggleAndAutoRestore(t *testing.T) {
+	vncAddress := startFakeVNCServer(t)
+	server, _ := testHandler(t, vncAddress)
+	privacy := server.privacy.(*fakePrivacy)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	client, response := loginClient(t, ts, "test-password")
+	response.Body.Close()
+	if privacy.enabled() {
+		t.Fatal("anti-peek should start disabled")
+	}
+
+	body := strings.NewReader(`{"enabled":true}`)
+	request, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/privacy", body)
+	request.Header.Set("Content-Type", "application/json")
+	result, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Body.Close()
+	if result.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(result.Body)
+		t.Fatalf("privacy enable failed: %d %s", result.StatusCode, raw)
+	}
+	if !privacy.enabled() {
+		t.Fatal("expected anti-peek mode to be enabled")
+	}
+
+	cookies := client.Jar.Cookies(mustURL(t, ts.URL))
+	header := http.Header{}
+	header.Set("Cookie", cookies[0].Name+"="+cookies[0].Value)
+	header.Set("Origin", ts.URL)
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/websocket"
+	conn, upgradeResponse, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		if upgradeResponse != nil {
+			raw, _ := io.ReadAll(upgradeResponse.Body)
+			t.Fatalf("websocket dial: %v (%d %s)", err, upgradeResponse.StatusCode, raw)
+		}
+		t.Fatalf("websocket dial: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for privacy.enabled() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if privacy.enabled() {
+		t.Fatal("expected anti-peek mode to restore after the last session")
 	}
 }
 

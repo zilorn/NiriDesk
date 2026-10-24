@@ -17,7 +17,15 @@ const (
 	defaultVNCAddress    = "127.0.0.1:5900"
 	defaultSessionTTL    = 12 * time.Hour
 	defaultControlSocket = "/tmp/niridesk-wayvnc.sock"
+	defaultAudioDevice   = "@DEFAULT_MONITOR@"
 )
+
+// Audio contains the settings used to capture the host's system audio.
+type Audio struct {
+	Enabled bool
+	Binary  string
+	Device  string
+}
 
 // Wayvnc contains the settings used to supervise the local wayvnc process.
 type Wayvnc struct {
@@ -47,6 +55,7 @@ type Config struct {
 	MaxClients             int
 	LogLevel               slog.Level
 	Wayvnc                 Wayvnc
+	Audio                  Audio
 }
 
 // Load reads configuration from the environment and validates it.
@@ -57,6 +66,11 @@ func Load() (Config, error) {
 		CookieSecure: strings.ToLower(envOrDefault("COOKIE_SECURE", "auto")),
 		MaxClients:   4,
 		LogLevel:     slog.LevelInfo,
+		Audio: Audio{
+			Enabled: true,
+			Binary:  envOrDefault("AUDIO_BINARY", "parec"),
+			Device:  envOrDefault("AUDIO_DEVICE", defaultAudioDevice),
+		},
 		Wayvnc: Wayvnc{
 			Managed:       true,
 			Binary:        envOrDefault("WAYVNC_BIN", "wayvnc"),
@@ -137,6 +151,21 @@ func Load() (Config, error) {
 		return Config{}, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
 	}
 
+	if raw := os.Getenv("AUDIO_ENABLED"); raw != "" {
+		value, err := parseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("AUDIO_ENABLED: %w", err)
+		}
+		cfg.Audio.Enabled = value
+	}
+	if cfg.Audio.Enabled {
+		if cfg.Audio.Binary == "" || cfg.Audio.Device == "" {
+			return Config{}, errors.New("AUDIO_BINARY and AUDIO_DEVICE must not be empty")
+		}
+		if len(cfg.Audio.Device) > 256 || strings.ContainsRune(cfg.Audio.Device, '\x00') {
+			return Config{}, errors.New("AUDIO_DEVICE is invalid")
+		}
+	}
 	if raw := os.Getenv("WAYVNC_MANAGED"); raw != "" {
 		value, err := parseBool(raw)
 		if err != nil {
