@@ -1,6 +1,28 @@
 import type { Settings, ViewMode } from "../types";
 
 const STORAGE_KEY = "niridesk.settings.v1";
+const VIEW_BOOTSTRAP_KEY = "niridesk.view-bootstrap.v1";
+const CHROME_BOOTSTRAP_KEY = "niridesk.chrome-bootstrap.v1";
+
+function consumeViewBootstrap(): boolean {
+  try {
+    if (localStorage.getItem(VIEW_BOOTSTRAP_KEY)) return false;
+    localStorage.setItem(VIEW_BOOTSTRAP_KEY, "1");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function consumeChromeBootstrap(): boolean {
+  try {
+    if (localStorage.getItem(CHROME_BOOTSTRAP_KEY)) return false;
+    localStorage.setItem(CHROME_BOOTSTRAP_KEY, "1");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function prefersFilledViewport(): boolean {
   try {
@@ -19,7 +41,7 @@ export const defaultSettings: Settings = {
   compression: 2,
   viewMode: prefersFilledViewport() ? "fill" : "fit",
   viewOnly: false,
-  menuHidden: false,
+  menuHidden: prefersFilledViewport(),
 };
 
 function clamp(value: unknown, min: number, max: number, fallback: number): number {
@@ -34,17 +56,25 @@ export function loadSettings(): Settings {
       fit?: unknown;
     };
     const legacyFit = raw.fit;
-    const viewMode = isViewMode(raw.viewMode)
-      ? raw.viewMode
-      : legacyFit === false
-        ? "actual"
-        : defaultSettings.viewMode;
+    const bootstrapView = consumeViewBootstrap();
+    const bootstrapChrome = consumeChromeBootstrap();
+    const viewMode = bootstrapView
+      ? defaultSettings.viewMode
+      : isViewMode(raw.viewMode)
+        ? raw.viewMode
+        : legacyFit === false
+          ? "actual"
+          : defaultSettings.viewMode;
     return {
       quality: clamp(raw.quality, 1, 9, defaultSettings.quality),
       compression: clamp(raw.compression, 0, 9, defaultSettings.compression),
       viewMode,
       viewOnly: typeof raw.viewOnly === "boolean" ? raw.viewOnly : defaultSettings.viewOnly,
-      menuHidden: typeof raw.menuHidden === "boolean" ? raw.menuHidden : defaultSettings.menuHidden,
+      menuHidden: bootstrapChrome
+        ? defaultSettings.menuHidden
+        : typeof raw.menuHidden === "boolean"
+          ? raw.menuHidden
+          : defaultSettings.menuHidden,
     };
   } catch {
     return { ...defaultSettings };

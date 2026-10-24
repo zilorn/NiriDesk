@@ -95,7 +95,11 @@ export function createAppController() {
     void restoreSession();
     registerServiceWorker();
 
-    const fullscreenHandler = () => setFullscreen(Boolean(document.fullscreenElement));
+    const fullscreenHandler = () => {
+      const active = Boolean(document.fullscreenElement);
+      setFullscreen(active);
+      if (active) setMenuHidden(true);
+    };
     const visibilityHandler = () => {
       if (document.hidden) {
         clearModifiers();
@@ -497,6 +501,10 @@ export function createAppController() {
     setMenuHidden(false);
   }
 
+  function toggleMenu() {
+    setMenuHidden(!settings.menuHidden);
+  }
+
   function setViewOnly(value: boolean) {
     updateSetting("viewOnly", value);
     if (rfb) rfb.viewOnly = value;
@@ -689,6 +697,7 @@ export function createAppController() {
         await document.exitFullscreen();
       } else if (document.documentElement.requestFullscreen) {
         await document.documentElement.requestFullscreen();
+        setMenuHidden(true);
         const orientation = window.screen.orientation as ScreenOrientation & {
           lock?: (mode: string) => Promise<void>;
         };
@@ -792,6 +801,7 @@ export function createAppController() {
     setMenuHidden,
     hideMenu,
     showMenu,
+    toggleMenu,
     toggleModifier,
     isModifierActive,
     clearModifiers,

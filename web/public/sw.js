@@ -1,4 +1,4 @@
-const CACHE_NAME = "niridesk-v2";
+const CACHE_NAME = "niridesk-v3";
 const SHELL = [
   "/",
   "/index.html",

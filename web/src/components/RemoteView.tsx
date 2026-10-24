@@ -127,9 +127,6 @@ export function RemoteView() {
             <button class="icon-button" type="button" aria-label="设置" title="设置" onClick={() => app.openSheet("settings")}>
               <Icon name="sliders" />
             </button>
-            <button class="icon-button mobile-only" type="button" aria-label="隐藏菜单" title="隐藏菜单" onClick={app.hideMenu}>
-              <Icon name="eye-off" />
-            </button>
           </div>
         </header>
 
@@ -211,13 +208,14 @@ export function RemoteView() {
         </nav>
 
         <button
-          class="menu-reveal"
+          class="menu-toggle"
           type="button"
-          aria-label="显示菜单"
-          title="显示菜单"
-          onClick={app.showMenu}
+          aria-label={app.settings.menuHidden ? "显示菜单" : "隐藏菜单"}
+          aria-expanded={!app.settings.menuHidden}
+          title={app.settings.menuHidden ? "显示菜单" : "隐藏菜单"}
+          onClick={app.toggleMenu}
         >
-          <Icon name="menu" />
+          <Icon name={app.settings.menuHidden ? "menu" : "chevron-down"} />
         </button>
 
         <input

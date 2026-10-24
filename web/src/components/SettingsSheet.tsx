@@ -163,7 +163,7 @@ export function SettingsSheet() {
           <label class="setting-row mobile-setting">
             <span class="setting-copy">
               <span>隐藏控制菜单</span>
-              <p>菜单浮层隐藏后画面占满手机屏幕，右上角浮动按钮可恢复。</p>
+              <p>菜单浮层隐藏后画面占满手机屏幕，点屏幕右侧悬浮球可恢复。</p>
             </span>
             <span class="switch">
               <input
