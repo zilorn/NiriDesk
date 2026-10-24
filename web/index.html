@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#070a09" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="在浏览器中安全访问你的 niri 桌面。" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="NiriDesk" />
+    <title>NiriDesk · niri 远程桌面</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript><p class="noscript">NiriDesk 需要 JavaScript 才能建立远程桌面连接。</p></noscript>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>
