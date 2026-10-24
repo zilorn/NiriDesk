@@ -1,6 +1,8 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
 import { createStore } from "solid-js/store";
 import { api, ApiError, errorMessage, isUnauthorized } from "./lib/api";
+import { installFillViewport, remoteFramebufferSize } from "./lib/fillViewport";
+import type { FillViewport } from "./lib/fillViewport";
 import { MODIFIER_KEYS, SPECIAL_KEYS, keysymForCharacter } from "./lib/keys";
 import type { ModifierName, SpecialName } from "./lib/keys";
 import { loadSettings, saveSettings } from "./lib/settings";
@@ -16,6 +18,7 @@ import type {
   SheetName,
   StatusResponse,
   ToastMessage,
+  ViewMode,
 } from "./types";
 
 interface WakeLockLike {
@@ -24,6 +27,12 @@ interface WakeLockLike {
 }
 
 const WAKE_LOCK = "wakeLock" in navigator;
+
+const VIEW_MODE_LABELS: Record<ViewMode, string> = {
+  fit: "适应窗口",
+  fill: "铺满屏幕",
+  actual: "1:1 拖动",
+};
 
 export function createAppController() {
   const [authenticated, setAuthenticated] = createSignal<boolean | null>(null);
@@ -50,6 +59,7 @@ export function createAppController() {
   let screenEl: HTMLElement | null = null;
   let keyboardEl: HTMLInputElement | null = null;
   let rfb: RfbClient | null = null;
+  let fillViewport: FillViewport | null = null;
   let generation = 0;
   let statusTimer: number | undefined;
   let wakeLock: WakeLockLike | null = null;
@@ -288,6 +298,7 @@ export function createAppController() {
     }
 
     rfb = instance;
+    fillViewport = installFillViewport(instance);
     instance.background = "radial-gradient(circle at 50% 44%, #0b1611 0%, #040706 70%)";
     instance.showDotCursor = true;
     instance.focusOnClick = true;
@@ -310,6 +321,7 @@ export function createAppController() {
     instance.addEventListener("disconnect", (event) => {
       if (rfb !== instance) return;
       rfb = null;
+      fillViewport = null;
       clearModifiers();
       void releaseWakeLock();
       setConnection("error");
@@ -365,6 +377,7 @@ export function createAppController() {
     const instance = rfb;
     generation++;
     rfb = null;
+    fillViewport = null;
     if (instance) {
       try {
         instance.disconnect();
@@ -398,19 +411,32 @@ export function createAppController() {
 
   function applyViewMode() {
     if (!rfb) return;
-    if (settings.fit) {
-      rfb.clipViewport = false;
-      rfb.dragViewport = false;
-      rfb.scaleViewport = true;
+    const instance = rfb;
+    fillViewport?.setActive(false);
+
+    if (settings.viewMode === "fill" && fillViewport?.supported) {
+      instance.scaleViewport = false;
+      instance.clipViewport = true;
+      instance.dragViewport = true;
+      fillViewport.setActive(true);
+    } else if (settings.viewMode === "actual") {
+      instance.scaleViewport = false;
+      instance.clipViewport = true;
+      instance.dragViewport = true;
     } else {
-      rfb.scaleViewport = false;
-      rfb.clipViewport = true;
-      rfb.dragViewport = true;
+      instance.scaleViewport = true;
+      instance.clipViewport = false;
+      instance.dragViewport = false;
     }
     window.setTimeout(updateResolution, 60);
   }
 
   function setResolutionText() {
+    const framebuffer = remoteFramebufferSize(rfb);
+    if (framebuffer) {
+      setResolution(`${framebuffer.width} × ${framebuffer.height}`);
+      return;
+    }
     const canvas = screenEl?.querySelector("canvas");
     setResolution(canvas && canvas.width && canvas.height ? `${canvas.width} × ${canvas.height}` : "—");
   }
@@ -436,15 +462,39 @@ export function createAppController() {
     if (rfb) rfb.compressionLevel = compression;
   }
 
-  function setFit(value: boolean) {
-    updateSetting("fit", value);
-    applyViewMode();
+  function viewModeLabel(mode: ViewMode = settings.viewMode): string {
+    return VIEW_MODE_LABELS[mode];
   }
 
-  function toggleFit() {
-    const next = !settings.fit;
-    setFit(next);
-    toast(next ? "已适应窗口" : "已切换为 1:1 拖动查看");
+  function setViewMode(mode: ViewMode) {
+    if (settings.viewMode === mode) return;
+    updateSetting("viewMode", mode);
+    applyViewMode();
+    toast(`画面缩放：${viewModeLabel(mode)}`);
+  }
+
+  function cycleViewMode() {
+    const order: ViewMode[] = ["fit", "fill", "actual"];
+    const index = order.indexOf(settings.viewMode);
+    setViewMode(order[(index + 1) % order.length]);
+  }
+
+  function setMenuHidden(hidden: boolean) {
+    if (settings.menuHidden === hidden) return;
+    updateSetting("menuHidden", hidden);
+    if (hidden) {
+      setModifierBeltOpen(false);
+      clearModifiers();
+      keyboardEl?.blur();
+    }
+  }
+
+  function hideMenu() {
+    setMenuHidden(true);
+  }
+
+  function showMenu() {
+    setMenuHidden(false);
   }
 
   function setViewOnly(value: boolean) {
@@ -735,9 +785,13 @@ export function createAppController() {
     refreshStatus,
     setQuality,
     setCompression,
-    setFit,
-    toggleFit,
+    viewModeLabel,
+    setViewMode,
+    cycleViewMode,
     setViewOnly,
+    setMenuHidden,
+    hideMenu,
+    showMenu,
     toggleModifier,
     isModifierActive,
     clearModifiers,

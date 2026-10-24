@@ -113,17 +113,38 @@ export function SettingsSheet() {
               <output for="compression">{app.settings.compression}</output>
             </div>
           </div>
-          <label class="setting-row">
-            <span class="setting-copy"><span>适应窗口</span><p>自动缩放，适合手机竖屏查看。</p></span>
-            <span class="switch">
-              <input
-                type="checkbox"
-                checked={app.settings.fit}
-                onChange={(event) => app.setFit(event.currentTarget.checked)}
-              />
-              <span class="switch-track" />
-            </span>
-          </label>
+          <div class="setting-row setting-row-stack">
+            <div class="setting-copy">
+              <span>缩放模式</span>
+              <p>「铺满」按屏幕裁切画面边缘，拖动即可平移；「1:1」按原始像素拖动查看。</p>
+            </div>
+            <div class="segmented" role="group" aria-label="缩放模式">
+              <button
+                class={app.settings.viewMode === "fit" ? "active" : ""}
+                type="button"
+                aria-pressed={app.settings.viewMode === "fit"}
+                onClick={() => app.setViewMode("fit")}
+              >
+                适应
+              </button>
+              <button
+                class={app.settings.viewMode === "fill" ? "active" : ""}
+                type="button"
+                aria-pressed={app.settings.viewMode === "fill"}
+                onClick={() => app.setViewMode("fill")}
+              >
+                铺满
+              </button>
+              <button
+                class={app.settings.viewMode === "actual" ? "active" : ""}
+                type="button"
+                aria-pressed={app.settings.viewMode === "actual"}
+                onClick={() => app.setViewMode("actual")}
+              >
+                1:1
+              </button>
+            </div>
+          </div>
           <label class="setting-row">
             <span class="setting-copy"><span>只看不控</span><p>禁止发送键盘与鼠标事件。</p></span>
             <span class="switch">
@@ -131,6 +152,24 @@ export function SettingsSheet() {
                 type="checkbox"
                 checked={app.settings.viewOnly}
                 onChange={(event) => app.setViewOnly(event.currentTarget.checked)}
+              />
+              <span class="switch-track" />
+            </span>
+          </label>
+        </section>
+
+        <section class="settings-section mobile-setting">
+          <h3>界面</h3>
+          <label class="setting-row mobile-setting">
+            <span class="setting-copy">
+              <span>隐藏控制菜单</span>
+              <p>菜单浮层隐藏后画面占满手机屏幕，右上角浮动按钮可恢复。</p>
+            </span>
+            <span class="switch">
+              <input
+                type="checkbox"
+                checked={app.settings.menuHidden}
+                onChange={(event) => app.setMenuHidden(event.currentTarget.checked)}
               />
               <span class="switch-track" />
             </span>

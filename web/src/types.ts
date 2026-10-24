@@ -4,11 +4,14 @@ export type AuthState = "checking" | "online" | "offline";
 
 export type SheetName = "settings" | "clipboard" | null;
 
+export type ViewMode = "fit" | "fill" | "actual";
+
 export interface Settings {
   quality: number;
   compression: number;
-  fit: boolean;
+  viewMode: ViewMode;
   viewOnly: boolean;
+  menuHidden: boolean;
 }
 
 export interface OutputInfo {

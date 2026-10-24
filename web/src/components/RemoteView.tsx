@@ -87,7 +87,10 @@ export function RemoteView() {
 
   return (
     <>
-      <div class={`app${app.beltOpen() ? " modifier-open" : ""}`} id="app-view">
+      <div
+        class={`app${app.beltOpen() ? " modifier-open" : ""}${app.settings.menuHidden ? " chrome-hidden" : ""}`}
+        id="app-view"
+      >
         <header class="topbar">
           <div class="brand brand-compact">
             <BrandMark />
@@ -110,12 +113,11 @@ export function RemoteView() {
               <Icon name="clipboard" />
             </button>
             <button
-              class={`icon-button desktop-action${app.settings.fit ? " active" : ""}`}
+              class={`icon-button desktop-action${app.settings.viewMode === "fit" ? " active" : ""}`}
               type="button"
-              aria-label="切换缩放"
-              aria-pressed={app.settings.fit}
-              title="切换缩放"
-              onClick={app.toggleFit}
+              aria-label={`切换缩放模式，当前${app.viewModeLabel()}`}
+              title={`缩放：${app.viewModeLabel()}`}
+              onClick={app.cycleViewMode}
             >
               <Icon name="fit" />
             </button>
@@ -124,6 +126,9 @@ export function RemoteView() {
             </button>
             <button class="icon-button" type="button" aria-label="设置" title="设置" onClick={() => app.openSheet("settings")}>
               <Icon name="sliders" />
+            </button>
+            <button class="icon-button mobile-only" type="button" aria-label="隐藏菜单" title="隐藏菜单" onClick={app.hideMenu}>
+              <Icon name="eye-off" />
             </button>
           </div>
         </header>
@@ -190,11 +195,12 @@ export function RemoteView() {
             <Icon name="command" /><span>修饰键</span>
           </button>
           <button
-            class={`tool-button${app.settings.fit ? " active" : ""}`}
+            class={`tool-button${app.settings.viewMode === "fill" ? " active" : ""}`}
             type="button"
-            onClick={app.toggleFit}
+            aria-label={`切换缩放模式，当前${app.viewModeLabel()}`}
+            onClick={app.cycleViewMode}
           >
-            <Icon name="fit" /><span>缩放</span>
+            <Icon name="fit" /><span>{app.viewModeLabel()}</span>
           </button>
           <button class="tool-button" type="button" onClick={() => app.openSheet("clipboard")}>
             <Icon name="clipboard" /><span>剪贴板</span>
@@ -203,6 +209,16 @@ export function RemoteView() {
             <Icon name="sliders" /><span>设置</span>
           </button>
         </nav>
+
+        <button
+          class="menu-reveal"
+          type="button"
+          aria-label="显示菜单"
+          title="显示菜单"
+          onClick={app.showMenu}
+        >
+          <Icon name="menu" />
+        </button>
 
         <input
           ref={(element) => { keyboardInput = element; }}
