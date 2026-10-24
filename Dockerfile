@@ -42,6 +42,7 @@ LABEL org.opencontainers.image.title="NiriDesk" \
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
+        pulseaudio-utils \
         tini \
         wayvnc \
     && rm -rf /var/lib/apt/lists/* \
@@ -58,7 +59,10 @@ ENV HOME=/tmp \
     WAYVNCCTL_BIN=wayvncctl \
     WAYVNC_CONTROL_SOCKET=/tmp/niridesk-wayvnc.sock \
     WAYVNC_MANAGED=true \
-    WAYVNC_MAX_FPS=30
+    WAYVNC_MAX_FPS=30 \
+    AUDIO_ENABLED=true \
+    AUDIO_BINARY=parec \
+    AUDIO_DEVICE=@DEFAULT_MONITOR@
 
 USER 1000:1000
 EXPOSE 8080

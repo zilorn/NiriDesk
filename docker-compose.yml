@@ -27,6 +27,9 @@ services:
       WAYVNC_MAX_FPS: ${WAYVNC_MAX_FPS:-30}
       WAYVNC_SHOW_CURSOR: ${WAYVNC_SHOW_CURSOR:-true}
       WAYVNC_DISABLE_INPUT: ${WAYVNC_DISABLE_INPUT:-false}
+      AUDIO_ENABLED: ${AUDIO_ENABLED:-true}
+      AUDIO_BINARY: ${AUDIO_BINARY:-parec}
+      AUDIO_DEVICE: "${AUDIO_DEVICE:-@DEFAULT_MONITOR@}"
     volumes:
       - "${XDG_RUNTIME_DIR:-/run/user/1000}:${XDG_RUNTIME_DIR:-/run/user/1000}:ro"
     read_only: true
