@@ -5,11 +5,16 @@
 ```
 手机 / 平板 / 桌面浏览器
         │  HTTPS + WSS（密码登录、签名 Cookie）
-        ▼
-NiriDesk Go 网关（鉴权、限流、WebSocket ↔ RFB 代理）
-        │  仅回环 127.0.0.1:5900
-        ▼
-wayvnc ── Wayland ──> niri / 当前会话输出
+        ├── RFB 画面与控制 ──┐
+        └── 时间戳 PCM 音频 ─┤
+                             ▼
+                    NiriDesk Go 网关（鉴权、限流、代理）
+                     │                      │
+                     │ 仅回环 127.0.0.1:5900│ PulseAudio/PipeWire
+                     ▼                      ▼
+                   wayvnc ──── niri      parec（系统声音）
+                     │
+                     └── Wayland gamma control（防窥时物理输出全黑）
 ```
 
 ## 功能
@@ -17,6 +22,8 @@ wayvnc ── Wayland ──> niri / 当前会话输出
 - **面向 niri**：基于 wayvnc 的 wlr-screencopy 与 virtual-keyboard/pointer 支持，不需要 Xwayland。
 - **手机可用**：画面默认铺满手机屏幕（裁切边缘、拖动平移），菜单以浮层覆盖且可隐藏；支持适应窗口/1:1 拖动、横屏全屏、粘滞 `Ctrl`/`Alt`/`Super`/`Shift` 与常用按键、移动端虚拟键盘。
 - **多显示器**：在设置中列出 niri 输出并实时切换捕获目标，无需重启容器。
+- **音频同步**：通过独立鉴权的 WebSocket 传输带时间戳的 48 kHz 立体声 PCM，浏览器用 Web Audio 调度播放；可调节音画延迟以补偿 VNC 画面延迟。
+- **防窥模式**：通过 Wayland gamma control 把物理输出压成全黑，wayvnc screencopy 仍取得正常画面；远程键鼠不会唤醒显示，关闭模式或断开最后一个画面会话后自动恢复。
 - **会话安全**：口令登录、HttpOnly/SameSite 签名 Cookie、登录限流、WebSocket Origin 校验；wayvnc 永远只监听容器回环地址。
 - **可安装 PWA**：在 HTTPS 或 localhost 下可添加到主屏幕，支持 Wake Lock 防止手机息屏。
 - **可调画质**：noVNC 画质/压缩实时调整，支持只看不控、剪贴板桥接和多名观众。
@@ -29,6 +36,8 @@ wayvnc ── Wayland ──> niri / 当前会话输出
 - 运行容器的用户 UID 必须与 Wayland 会话用户一致，默认 `1000`。
 - 宿主机可访问 `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` socket。
 - 不需要 `/dev/dri`；wayvnc 使用 screencopy 而不是 DRM 接管。
+- 音频需要宿主机提供 PulseAudio 或 PipeWire 的 Pulse 兼容 socket；默认使用当前用户的 sink monitor。镜像内已包含 `parec`。
+- 防窥模式需要合成器支持 `zwlr_gamma_control_manager_v1`（niri 26.04 已验证）。
 - 构建镜像需要访问 Go module proxy 与 npm registry。前端依赖由 `web/pnpm-lock.yaml` 锁定，第三方源码、`node_modules` 和构建产物都不进入本仓库。
 
 > NiriDesk 面向单用户、可信网络的远程访问。暴露到公网前请使用 HTTPS 反向代理或 VPN。
@@ -73,10 +82,12 @@ docker compose down
 1. 在同一局域网或 VPN 中打开服务地址并登录。
 2. 手机上的远程画面默认「铺满」整个屏幕，画面边缘会按屏幕比例裁切；单指拖动可平移。缩放按钮在「适应 / 铺满 / 1:1」之间循环，可在设置中直接选择。
 3. 底部工具栏和顶部状态栏都是覆盖在画面上的浮层，不占用远程画面。点屏幕右侧的悬浮球或设置中的「隐藏控制菜单」可隐藏它们；隐藏后点悬浮球恢复。
-4. 底部工具栏提供键盘、修饰键、缩放、剪贴板和设置；右上角可全屏。
+4. 底部工具栏提供键盘、修饰键、缩放、声音、剪贴板和设置；右上角可全屏。
 5. 使用「修饰键」时，先点亮 `Ctrl`/`Alt`/`Super`/`Shift`，再按字母或常用键；`释放` 可清除所有按下状态。
-6. 手机浏览器通常不允许 HTTP 页面访问剪贴板或安装 PWA。通过 HTTPS 访问后功能完整；建议使用 Caddy、Tailscale Serve 或可信内网证书。
-7. 观看端不操作时可打开「只看不控」；它会阻止前端发送所有键鼠事件。
+6. 点「声音」播放远端系统音频。浏览器要求用户点按后才能播放；若口型不同步，在设置的「音画同步延迟」中增大数值。
+7. 在设置中打开「防窥模式」后，物理显示器会全黑，但远程画面与声音继续工作。关闭开关、断开最后一个画面会话或退出服务时自动恢复。
+8. 手机浏览器通常不允许 HTTP 页面访问剪贴板或安装 PWA。通过 HTTPS 访问后功能完整；建议使用 Caddy、Tailscale Serve 或可信内网证书。
+9. 观看端不操作时可打开「只看不控」；它会阻止前端发送所有键鼠事件。
 
 ## 配置
 
@@ -98,6 +109,9 @@ docker compose down
 | `WAYVNC_MAX_FPS` | `30` | 捕获帧率上限，1–120。 |
 | `WAYVNC_SHOW_CURSOR` | `true` | 是否在画面中绘制远端鼠标指针。 |
 | `WAYVNC_DISABLE_INPUT` | `false` | 设为 `true` 时彻底禁用远程键鼠，只保留观看。 |
+| `AUDIO_ENABLED` | `true` | 是否捕获并传输系统音频；缺少 PulseAudio/PipeWire 时可关闭。 |
+| `AUDIO_DEVICE` | `@DEFAULT_MONITOR@` | PulseAudio 源；默认捕获当前默认输出的 monitor。 |
+| `AUDIO_BINARY` | `parec` | 音频捕获程序路径，通常无需修改。 |
 | `LOG_LEVEL` | `info` | `debug`、`info`、`warn`、`error`。 |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | 空 | 直接让 NiriDesk 提供 HTTPS 时使用，需同时设置并将证书挂载进容器。 |
 
@@ -105,7 +119,7 @@ docker compose down
 
 ### 多显示器
 
-登录后打开「设置 → 显示器输出」，选择任意 niri 输出即可切换。所有观看者会同时看到新的输出；设置只在本次 wayvnc 进程存活期间有效。要固定默认输出，设置 `.env` 中的 `WAYVNC_OUTPUT` 并重建容器。
+登录后打开「设置 → 显示器输出」，选择任意 niri 输出即可切换。所有观看者会同时看到新的输出；设置只在本次 wayvnc 进程存活期间有效。要固定默认输出，设置 `.env` 中的 `WAYVNC_OUTPUT` 并重建容器。防窥模式会压黑所有物理输出，而不只是当前捕获的输出。
 
 ## HTTPS 与安全
 
@@ -147,7 +161,7 @@ volumes:
 
 Wayland socket 的父子目录权限通常为 `0700`，因此容器的 UID 必须与宿主机用户一致；不匹配时会看到 `Permission denied` 或 wayvnc 无法连接。使用 rootless Docker 且用户命名空间映射不同时，需要额外配置映射或改用与映射后 UID 匹配的 `PUID`/`PGID`。
 
-Wayvnc 不写入 Wayland socket 目录，因此只读挂载足够。它需要写入控制 socket，使用 `/tmp` 的 tmpfs。
+Wayvnc 不写入 Wayland socket 目录，因此只读挂载足够。它需要写入控制 socket，使用 `/tmp` 的 tmpfs。音频通过同一挂载中的 PulseAudio socket 采集；防窥通过 Wayland socket 设置 gamma，不需要额外设备权限。
 
 ## 本地开发
 
@@ -179,8 +193,9 @@ bin/niridesk
 
 ### 测试
 
-- Go 单元测试覆盖登录会话、限流、配置校验、wayvnc 控制接口和 WebSocket 代理。
+- Go 单元测试覆盖登录会话、限流、配置校验、wayvnc 控制接口、音频帧协议、防窥 wire 协议和 WebSocket 代理。
 - 开发中已用真实 niri + wayvnc + headless Chrome 驱动验证登录、画布连接、桌面端/手机端布局、设置面板、输出切换与 wayvnc 崩溃重启；此浏览器脚本依赖本机 Chrome/CDP，未作为公开测试入口提交。
+- 音频已在容器内用真实 PulseAudio/PipeWire 验证采集、WebSocket 帧时间戳和非静音内容；防窥已通过 DRM `GAMMA_LUT` 读回验证全零、远程输入后保持全零、关闭后恢复。
 - 当前验证环境：niri 26.04、wayvnc 0.9.1、Debian trixie、Chrome 156。
 
 ## 故障排查
@@ -219,6 +234,22 @@ docker exec niridesk wayvncctl -S /tmp/niridesk-wayvnc.sock -j output-list
 
 浏览器要求安全上下文。使用 HTTPS（或 localhost）。纯 HTTP 局域网页面只能使用基础远程桌面。
 
+**声音按钮不可用或没有声音**
+
+```bash
+docker exec niridesk parec --raw --format=s16le --rate=48000 --channels=2 --device=@DEFAULT_MONITOR@ --latency-msec=20 | wc -c
+```
+
+先确认宿主机 PulseAudio/PipeWire 正常、容器 UID 能访问 `$XDG_RUNTIME_DIR/pulse/native`。浏览器还要求点按后才能播放。自定义 PulseAudio 服务地址时，需要自行给容器设置 `PULSE_SERVER`。
+
+**音画不同步**
+
+音频与 VNC 画面走不同通道，VNC 编码与网络延迟通常更大。打开设置，提高「音画同步延迟」直到声音与画面口型一致。该值会保存在浏览器本地。
+
+**防窥模式不可用**
+
+防窥依赖 Wayland gamma control。运行 `wayland-info | grep gamma` 确认存在 `zwlr_gamma_control_manager_v1`。其他合成器或远程/无头环境可能不提供该协议。开启后应在物理显示器上看到全黑，但远程画面保持正常。
+
 **输入法输入中文无效**
 
 手机端隐藏输入框会把 IME 完成的字符以 Unicode keysym 发送；部分远处的应用/输入法组合可能不接受这种注入。可改用物理键盘、在远端启用输入法，或通过剪贴板传递文本。
@@ -229,8 +260,11 @@ iOS Safari 对元素全屏支持有限；添加到主屏幕后以独立窗口运
 
 ## 限制
 
-- 同一时间只捕获一个输出，切换会影响所有观看者。
-- 无音频、文件传输、多用户账号或录制。
+- 同一时间只捕获一个输出，切换会影响所有观看者；防窥会压黑所有物理输出。
+- 音频使用未压缩 48 kHz 立体声 PCM，约 1.5 Mbps/观看者，尚未使用 Opus 等压缩编码。
+- 音画同步需要手动调节延迟；VNC 没有可用的逐帧时间戳，无法自动做口型对齐。
+- 防窥依赖合成器的 `wlr-gamma-control`；不支持该协议的合成器无法启用。远程输入不会清除 gamma，但进程崩溃时由合成器在连接断开后自动恢复。
+- 无文件传输、多用户账号或录制。
 - 画面经 VNC/RFB 传输，不是为高帧率游戏设计的协议；局域网办公体验良好，公网高延迟下建议降低画质与帧率。
 - 依赖 niri 提供的 screencopy、virtual pointer/keyboard 与 wayvnc 控制接口；其他 Wayland 合成器可能可用但未验证。
 - 剪贴板只处理文本。
