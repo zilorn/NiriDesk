@@ -1,0 +1,7 @@
+# Put NiriDesk behind HTTPS on a trusted LAN or private network.
+# 1. Set BIND_ADDR=127.0.0.1 and TRUST_PROXY=true in .env.
+# 2. Point remote.example.com at this host and run Caddy with this file.
+remote.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

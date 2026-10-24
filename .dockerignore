@@ -1,0 +1,12 @@
+.git
+.cache
+bin
+dist
+node_modules
+.env
+*.log
+.agents
+vendor
+web/node_modules
+web/dist
+web/.vite

@@ -1,0 +1,44 @@
+name: niridesk
+
+services:
+  niridesk:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-0.1.0}
+        COMMIT: ${COMMIT:-local}
+    image: niridesk:${VERSION:-0.1.0}
+    container_name: niridesk
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${PORT:-8080}:8080"
+    environment:
+      REMOTE_PASSWORD: ${REMOTE_PASSWORD:?Set REMOTE_PASSWORD in .env or the environment}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SESSION_TTL: ${SESSION_TTL:-12h}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+      MAX_CLIENTS: ${MAX_CLIENTS:-4}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR:-/run/user/1000}
+      WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-wayland-1}
+      WAYVNC_OUTPUT: ${WAYVNC_OUTPUT:-}
+      WAYVNC_MAX_FPS: ${WAYVNC_MAX_FPS:-30}
+      WAYVNC_SHOW_CURSOR: ${WAYVNC_SHOW_CURSOR:-true}
+      WAYVNC_DISABLE_INPUT: ${WAYVNC_DISABLE_INPUT:-false}
+    volumes:
+      - "${XDG_RUNTIME_DIR:-/run/user/1000}:${XDG_RUNTIME_DIR:-/run/user/1000}:ro"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 8s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
