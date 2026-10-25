@@ -65,6 +65,7 @@ const messages: Record<string, string> = {
   output_switch_failed: "切换显示器失败。",
   output_refresh_failed: "无法刷新显示器列表。",
   invalid_output: "无效的显示器输出。",
+  power_lock_unavailable: "当前环境无法锁定宿主机屏幕。",
 };
 
 export function errorMessage(error: unknown): string {

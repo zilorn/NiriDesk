@@ -60,6 +60,12 @@ export interface PrivacyState {
   last_error?: string;
 }
 
+export interface PowerLockState {
+  enabled: boolean;
+  supported: boolean;
+  last_error?: string;
+}
+
 export interface StatusResponse {
   version: string;
   commit: string;
@@ -73,6 +79,7 @@ export interface StatusResponse {
   max_fps: number;
   audio: AudioStatus;
   privacy: PrivacyState;
+  power_lock: PowerLockState;
 }
 
 export interface OverlayState {

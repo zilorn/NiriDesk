@@ -15,6 +15,7 @@ import type {
   InstallPromptEvent,
   OutputInfo,
   OverlayState,
+  PowerLockState,
   PrivacyState,
   RfbClient,
   RfbConstructor,
@@ -62,6 +63,7 @@ export function createAppController() {
   const [audioState, setAudioState] = createSignal<AudioState>("idle");
   const [audioError, setAudioError] = createSignal("");
   const [privacyPending, setPrivacyPending] = createSignal(false);
+  const [powerLockPending, setPowerLockPending] = createSignal(false);
 
   let screenEl: HTMLElement | null = null;
   let keyboardEl: HTMLInputElement | null = null;
@@ -81,6 +83,8 @@ export function createAppController() {
   const audioAvailable = () => Boolean(status()?.audio.enabled && status()?.audio.available);
   const privacyEnabled = () => status()?.privacy.enabled ?? false;
   const privacySupported = () => status()?.privacy.supported ?? false;
+  const powerLockEnabled = () => status()?.power_lock.enabled ?? false;
+  const powerLockSupported = () => status()?.power_lock.supported ?? false;
   const audioLabel = () => {
     switch (audioState()) {
       case "playing": return "声音已开启";
@@ -600,6 +604,33 @@ export function createAppController() {
     }
   }
 
+  async function setPowerLock(enabled: boolean): Promise<void> {
+    if (powerLockPending()) return;
+    if (enabled && !powerLockSupported()) {
+      toast("当前环境无法访问 niri IPC，无法锁定屏幕", "error");
+      return;
+    }
+    setPowerLockPending(true);
+    try {
+      const state = await api<PowerLockState>("/api/power-lock", {
+        method: "POST",
+        body: { enabled },
+      });
+      const current = status();
+      if (current) setStatus({ ...current, power_lock: state });
+      toast(enabled ? "Power Lock 已开启：远程会话结束后锁定屏幕" : "Power Lock 已关闭");
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        expireSession();
+      } else {
+        toast(errorMessage(error), "error");
+        void refreshStatus();
+      }
+    } finally {
+      setPowerLockPending(false);
+    }
+  }
+
   function viewModeLabel(mode: ViewMode = settings.viewMode): string {
     return VIEW_MODE_LABELS[mode];
   }
@@ -921,6 +952,9 @@ export function createAppController() {
     privacyEnabled,
     privacySupported,
     privacyPending,
+    powerLockEnabled,
+    powerLockSupported,
+    powerLockPending,
     buildLabel,
     login,
     logout,
@@ -939,6 +973,7 @@ export function createAppController() {
     toggleAudio,
     setAudioDelay,
     setPrivacy,
+    setPowerLock,
     viewModeLabel,
     setViewMode,
     cycleViewMode,

@@ -64,6 +64,22 @@ export function SettingsSheet() {
     return { text: "防窥模式已关闭", mode: "warn" };
   };
 
+  const powerLockLine = (): StatusLine => {
+    const current = app.status();
+    if (!current) return { text: "正在读取 Power Lock 状态…", mode: "warn" };
+    const state = current.power_lock;
+    if (!state.supported) {
+      return { text: "未找到 niri IPC socket，无法启用 Power Lock", mode: "warn" };
+    }
+    if (state.last_error) {
+      return { text: state.last_error, mode: "bad" };
+    }
+    if (state.enabled) {
+      return { text: "已开启：最后一个远程画面会话断开 5 秒后锁屏并关闭显示器", mode: "ok" };
+    }
+    return { text: "已关闭", mode: "warn" };
+  };
+
   const statusLines = (): StatusLine[] => {
     const current = app.status();
     if (!current) return [{ text: "正在读取服务状态…", mode: "warn" }];
@@ -274,6 +290,32 @@ export function SettingsSheet() {
             </div>
           </div>
           <p class="setting-note">防窥通过 Wayland gamma control 将物理输出压成全黑，screencopy 仍取得正常画面；远程键鼠不会唤醒或恢复显示内容。关闭开关、最后一个远程画面会话断开或服务退出时会恢复。需要合成器支持 wlr-gamma-control。</p>
+        </section>
+
+        <section class="settings-section">
+          <h3>Power Lock</h3>
+          <label class="setting-row">
+            <span class="setting-copy">
+              <span>远程结束后锁定屏幕</span>
+              <p>最后一个远程画面会话断开 5 秒后锁定 niri 会话并关闭物理显示器；宽限期内重新连接会取消。</p>
+            </span>
+            <span class="switch">
+              <input
+                type="checkbox"
+                checked={app.powerLockEnabled()}
+                disabled={!app.powerLockSupported() || app.powerLockPending()}
+                onChange={(event) => void app.setPowerLock(event.currentTarget.checked)}
+              />
+              <span class="switch-track" />
+            </span>
+          </label>
+          <div class="status-lines">
+            <div class={`status-line ${powerLockLine().mode}`}>
+              <span class="status-dot" />
+              <span>{powerLockLine().text}</span>
+            </div>
+          </div>
+          <p class="setting-note">通过 niri IPC 调用宿主机的 logind 锁屏，再关闭物理输出。宿主机需要运行支持 logind 的锁屏器（如 DMS、swaylock），容器需要能看到 niri IPC socket。锁定后重新连接会显示锁屏界面，需要宿主机密码解锁。</p>
         </section>
 
         <section class="settings-section">
