@@ -199,6 +199,7 @@ bin/niridesk
 - Go 单元测试覆盖登录会话、限流、配置校验、wayvnc 控制接口、音频帧协议、防窥 wire 协议、Power Lock 触发与 niri IPC 请求序列，以及 WebSocket 代理。
 - 开发中已用真实 niri + wayvnc + headless Chrome 驱动验证登录、画布连接、桌面端/手机端布局、设置面板、输出切换与 wayvnc 崩溃重启；此浏览器脚本依赖本机 Chrome/CDP，未作为公开测试入口提交。
 - 音频已在容器内用真实 PulseAudio/PipeWire 验证采集、WebSocket 帧时间戳和非静音内容；防窥已通过 DRM `GAMMA_LUT` 读回验证全零、远程输入后保持全零、关闭后恢复。
+- Power Lock 已通过 Go 测试覆盖最后一个会话触发与宽限期重连取消，并在真实 niri + DMS 会话中验证 niri IPC 触发的 logind 锁屏与解锁。
 - 当前验证环境：niri 26.04、wayvnc 0.9.1、Debian trixie、Chrome 156。
 
 ## 故障排查
