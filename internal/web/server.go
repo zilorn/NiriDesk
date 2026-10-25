@@ -24,12 +24,20 @@ import (
 
 	"github.com/zilorn/niridesk/internal/auth"
 	"github.com/zilorn/niridesk/internal/config"
+	"github.com/zilorn/niridesk/internal/powerlock"
 	"github.com/zilorn/niridesk/internal/privacy"
 	"github.com/zilorn/niridesk/internal/wayvnc"
 	webassets "github.com/zilorn/niridesk/web"
 )
 
-const sessionCookie = "niridesk_session"
+const (
+	sessionCookie = "niridesk_session"
+
+	// A short grace period lets a page refresh or a network handoff reconnect
+	// before the physical screen is locked.
+	defaultPowerLockDelay = 5 * time.Second
+	powerLockTimeout      = 5 * time.Second
+)
 
 // BuildInfo describes the running niridesk build.
 type BuildInfo struct {
@@ -52,15 +60,24 @@ type PrivacyController interface {
 	Close()
 }
 
+// PowerLockController is the host surface used to lock the screen after the
+// last remote viewer disconnects.
+type PowerLockController interface {
+	State() powerlock.State
+	SetEnabled(bool) error
+	Lock(context.Context) error
+}
+
 // Server implements the authenticated HTTP and WebSocket API.
 type Server struct {
-	cfg     config.Config
-	auth    *auth.Manager
-	limiter *auth.Limiter
-	wayvnc  WayvncController
-	privacy PrivacyController
-	build   BuildInfo
-	logger  *slog.Logger
+	cfg       config.Config
+	auth      *auth.Manager
+	limiter   *auth.Limiter
+	wayvnc    WayvncController
+	privacy   PrivacyController
+	powerLock PowerLockController
+	build     BuildInfo
+	logger    *slog.Logger
 
 	staticFS       fs.FS
 	mux            *http.ServeMux
@@ -71,6 +88,11 @@ type Server struct {
 	audioActive    atomic.Int64
 	audioErrMu     sync.RWMutex
 	audioLastError string
+
+	powerLockMu         sync.Mutex
+	powerLockTimer      *time.Timer
+	powerLockGeneration uint64
+	powerLockDelay      time.Duration
 }
 
 // New builds the HTTP handler with the embedded frontend build.
@@ -86,17 +108,19 @@ func New(cfg config.Config, controller WayvncController, build BuildInfo, logger
 // do not depend on the generated frontend build.
 func newServer(cfg config.Config, controller WayvncController, build BuildInfo, logger *slog.Logger, staticFS fs.FS) *Server {
 	s := &Server{
-		cfg:         cfg,
-		auth:        auth.New(cfg.Password, cfg.SessionSecret, cfg.SessionTTL),
-		limiter:     auth.NewLimiter(5, 15*time.Minute, 5*time.Minute),
-		wayvnc:      controller,
-		privacy:     privacy.NewController(logger),
-		build:       build,
-		logger:      logger,
-		staticFS:    staticFS,
-		startedAt:   time.Now(),
-		clientSlots: make(chan struct{}, cfg.MaxClients),
-		audioSlots:  make(chan struct{}, cfg.MaxClients),
+		cfg:            cfg,
+		auth:           auth.New(cfg.Password, cfg.SessionSecret, cfg.SessionTTL),
+		limiter:        auth.NewLimiter(5, 15*time.Minute, 5*time.Minute),
+		wayvnc:         controller,
+		privacy:        privacy.NewController(logger),
+		powerLock:      powerlock.NewController(logger),
+		build:          build,
+		logger:         logger,
+		staticFS:       staticFS,
+		startedAt:      time.Now(),
+		clientSlots:    make(chan struct{}, cfg.MaxClients),
+		audioSlots:     make(chan struct{}, cfg.MaxClients),
+		powerLockDelay: defaultPowerLockDelay,
 	}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -105,6 +129,7 @@ func newServer(cfg config.Config, controller WayvncController, build BuildInfo, 
 	s.mux.HandleFunc("GET /api/status", s.handleStatus)
 	s.mux.HandleFunc("POST /api/output", s.handleOutput)
 	s.mux.HandleFunc("POST /api/privacy", s.handlePrivacy)
+	s.mux.HandleFunc("POST /api/power-lock", s.handlePowerLock)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /websocket", s.handleWebSocket)
 	s.mux.HandleFunc("GET /audio", s.handleAudioWebSocket)
@@ -248,6 +273,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		MaxFPS:        s.cfg.Wayvnc.MaxFPS,
 		Audio:         s.audioStatus(),
 		Privacy:       s.privacy.State(),
+		PowerLock:     s.powerLock.State(),
 	}
 	if outputErr != nil {
 		response.OutputError = outputErr.Error()
@@ -268,6 +294,7 @@ type statusResponse struct {
 	MaxFPS        int             `json:"max_fps"`
 	Audio         audioStatus     `json:"audio"`
 	Privacy       privacy.State   `json:"privacy"`
+	PowerLock     powerlock.State `json:"power_lock"`
 }
 
 type vncStatus struct {
@@ -354,8 +381,119 @@ func (s *Server) handlePrivacy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
-// Close restores physical monitors when the process shuts down.
+type powerLockRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) handlePowerLock(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.originAllowed(r, false) {
+		writeError(w, http.StatusForbidden, "origin_not_allowed")
+		return
+	}
+	var request powerLockRequest
+	if err := decodeJSON(w, r, &request, 1024); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	if err := s.powerLock.SetEnabled(request.Enabled); err != nil {
+		s.logger.Warn("power lock preference change failed", "enabled", request.Enabled, "error", err)
+		writeError(w, http.StatusBadGateway, "power_lock_unavailable")
+		return
+	}
+	if !request.Enabled {
+		s.cancelPendingPowerLock()
+	}
+	state := s.powerLock.State()
+	s.logger.Info("power lock preference changed", "enabled", state.Enabled, "client", s.clientIP(r))
+	writeJSON(w, http.StatusOK, state)
+}
+
+// addClient registers a remote canvas session and cancels a pending Power Lock
+// when the viewer reconnects within the grace period.
+func (s *Server) addClient() int64 {
+	s.powerLockMu.Lock()
+	defer s.powerLockMu.Unlock()
+
+	s.powerLockGeneration++
+	if s.powerLockTimer != nil {
+		s.powerLockTimer.Stop()
+		s.powerLockTimer = nil
+	}
+	return s.activeClient.Add(1)
+}
+
+// removeClient unregisters a remote canvas session and schedules Power Lock
+// when the last viewer leaves.
+func (s *Server) removeClient() int64 {
+	s.powerLockMu.Lock()
+	defer s.powerLockMu.Unlock()
+
+	remaining := s.activeClient.Add(-1)
+	if remaining == 0 {
+		s.schedulePowerLockLocked()
+	}
+	return remaining
+}
+
+func (s *Server) schedulePowerLockLocked() {
+	if s.powerLock == nil || !s.powerLock.State().Enabled {
+		return
+	}
+	if s.powerLockTimer != nil {
+		s.powerLockTimer.Stop()
+	}
+	generation := s.powerLockGeneration
+	delay := s.powerLockDelay
+	s.powerLockTimer = time.AfterFunc(delay, func() {
+		s.runPowerLock(generation)
+	})
+	s.logger.Info("power lock armed after the last remote session", "delay", delay)
+}
+
+func (s *Server) runPowerLock(generation uint64) {
+	s.powerLockMu.Lock()
+	if generation != s.powerLockGeneration {
+		s.powerLockMu.Unlock()
+		return
+	}
+	s.powerLockTimer = nil
+	if s.activeClient.Load() != 0 {
+		s.powerLockMu.Unlock()
+		return
+	}
+	enabled := s.powerLock != nil && s.powerLock.State().Enabled
+	s.powerLockMu.Unlock()
+	if !enabled {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), powerLockTimeout)
+	defer cancel()
+	if err := s.powerLock.Lock(ctx); err != nil {
+		s.logger.Warn("power lock failed", "error", err)
+	}
+}
+
+func (s *Server) cancelPendingPowerLock() {
+	s.powerLockMu.Lock()
+	defer s.powerLockMu.Unlock()
+
+	s.powerLockGeneration++
+	if s.powerLockTimer != nil {
+		s.powerLockTimer.Stop()
+		s.powerLockTimer = nil
+	}
+}
+
+// Close restores physical monitors when the process shuts down. Power Lock is
+// intentionally not armed here: stopping the service is not a remote session
+// ending, and a restart should not lock the desktop.
 func (s *Server) Close() {
+	s.cancelPendingPowerLock()
 	if s.privacy != nil {
 		s.privacy.Close()
 	}

@@ -59,14 +59,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	wsConn.SetReadLimit(maxClientPacket)
 	wsConn.SetReadDeadline(time.Time{})
 
-	s.activeClient.Add(1)
+	s.addClient()
 	started := time.Now()
 	s.logger.Info("remote session started",
 		"client", s.clientIP(r),
 		"active_clients", s.activeClient.Load(),
 	)
 	defer func() {
-		remaining := s.activeClient.Add(-1)
+		remaining := s.removeClient()
 		s.logger.Info("remote session closed",
 			"client", s.clientIP(r),
 			"duration_ms", time.Since(started).Milliseconds(),
