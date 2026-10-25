@@ -4,6 +4,7 @@ import { api, ApiError, errorMessage, isUnauthorized } from "./lib/api";
 import { RemoteAudio } from "./lib/audio";
 import { installFillViewport, remoteFramebufferSize } from "./lib/fillViewport";
 import type { FillViewport } from "./lib/fillViewport";
+import { installClickReleaseDelay } from "./lib/pointerCompat";
 import { MODIFIER_KEYS, SPECIAL_KEYS, keysymForCharacter } from "./lib/keys";
 import type { ModifierName, SpecialName } from "./lib/keys";
 import { loadSettings, saveSettings } from "./lib/settings";
@@ -66,6 +67,7 @@ export function createAppController() {
   let keyboardEl: HTMLInputElement | null = null;
   let rfb: RfbClient | null = null;
   let fillViewport: FillViewport | null = null;
+  let disposeClickReleaseDelay: (() => void) | null = null;
   let remoteAudio: RemoteAudio | null = null;
   let generation = 0;
   let statusTimer: number | undefined;
@@ -325,6 +327,7 @@ export function createAppController() {
 
     rfb = instance;
     fillViewport = installFillViewport(instance);
+    disposeClickReleaseDelay = installClickReleaseDelay(instance);
     instance.background = "radial-gradient(circle at 50% 44%, #0b1611 0%, #040706 70%)";
     instance.showDotCursor = true;
     instance.focusOnClick = true;
@@ -349,6 +352,8 @@ export function createAppController() {
       if (rfb !== instance) return;
       rfb = null;
       fillViewport = null;
+      disposeClickReleaseDelay?.();
+      disposeClickReleaseDelay = null;
       clearModifiers();
       closeAudio();
       void releaseWakeLock();
@@ -406,6 +411,8 @@ export function createAppController() {
     generation++;
     rfb = null;
     fillViewport = null;
+    disposeClickReleaseDelay?.();
+    disposeClickReleaseDelay = null;
     if (instance) {
       try {
         instance.disconnect();
