@@ -24,6 +24,7 @@
 - **多显示器**：在设置中列出 niri 输出并实时切换捕获目标，无需重启容器。
 - **音频同步**：通过独立鉴权的 WebSocket 传输带时间戳的 48 kHz 立体声 PCM，浏览器用 Web Audio 调度播放；可调节音画延迟以补偿 VNC 画面延迟。
 - **防窥模式**：通过 Wayland gamma control 把物理输出压成全黑，wayvnc screencopy 仍取得正常画面；远程键鼠不会唤醒显示，关闭模式或断开最后一个画面会话后自动恢复。
+- **Power Lock**：最后一个远程画面会话断开后，通过 niri IPC 请求宿主机 logind 锁屏并关闭物理输出；5 秒宽限期内的重连会取消。
 - **会话安全**：口令登录、HttpOnly/SameSite 签名 Cookie、登录限流、WebSocket Origin 校验；wayvnc 永远只监听容器回环地址。
 - **可安装 PWA**：在 HTTPS 或 localhost 下可添加到主屏幕，支持 Wake Lock 防止手机息屏。
 - **可调画质**：noVNC 画质/压缩实时调整，支持只看不控、剪贴板桥接和多名观众。
@@ -38,6 +39,7 @@
 - 不需要 `/dev/dri`；wayvnc 使用 screencopy 而不是 DRM 接管。
 - 音频需要宿主机提供 PulseAudio 或 PipeWire 的 Pulse 兼容 socket；默认使用当前用户的 sink monitor。镜像内已包含 `parec`。
 - 防窥模式需要合成器支持 `zwlr_gamma_control_manager_v1`（niri 26.04 已验证）。
+- Power Lock 需要容器能看到 `$XDG_RUNTIME_DIR/niri.*.sock`，并且宿主机运行支持 `org.freedesktop.login1.Session.Lock` 的锁屏器（如 DMS、swaylock）。
 - 构建镜像需要访问 Go module proxy 与 npm registry。前端依赖由 `web/pnpm-lock.yaml` 锁定，第三方源码、`node_modules` 和构建产物都不进入本仓库。
 
 > NiriDesk 面向单用户、可信网络的远程访问。暴露到公网前请使用 HTTPS 反向代理或 VPN。
@@ -86,8 +88,9 @@ docker compose down
 5. 使用「修饰键」时，先点亮 `Ctrl`/`Alt`/`Super`/`Shift`，再按字母或常用键；`释放` 可清除所有按下状态。
 6. 点「声音」播放远端系统音频。浏览器要求用户点按后才能播放；若口型不同步，在设置的「音画同步延迟」中增大数值。
 7. 在设置中打开「防窥模式」后，物理显示器会全黑，但远程画面与声音继续工作。关闭开关、断开最后一个画面会话或退出服务时自动恢复。
-8. 手机浏览器通常不允许 HTTP 页面访问剪贴板或安装 PWA。通过 HTTPS 访问后功能完整；建议使用 Caddy、Tailscale Serve 或可信内网证书。
-9. 观看端不操作时可打开「只看不控」；它会阻止前端发送所有键鼠事件。
+8. 打开「Power Lock」后，最后一个远程画面会话断开 5 秒后锁定 niri 会话并关闭显示器；5 秒内重连会取消。重新连接时会看到锁屏界面，需要先在宿主机上解锁。
+9. 手机浏览器通常不允许 HTTP 页面访问剪贴板或安装 PWA。通过 HTTPS 访问后功能完整；建议使用 Caddy、Tailscale Serve 或可信内网证书。
+10. 观看端不操作时可打开「只看不控」；它会阻止前端发送所有键鼠事件。
 
 ## 配置
 
@@ -161,7 +164,7 @@ volumes:
 
 Wayland socket 的父子目录权限通常为 `0700`，因此容器的 UID 必须与宿主机用户一致；不匹配时会看到 `Permission denied` 或 wayvnc 无法连接。使用 rootless Docker 且用户命名空间映射不同时，需要额外配置映射或改用与映射后 UID 匹配的 `PUID`/`PGID`。
 
-Wayvnc 不写入 Wayland socket 目录，因此只读挂载足够。它需要写入控制 socket，使用 `/tmp` 的 tmpfs。音频通过同一挂载中的 PulseAudio socket 采集；防窥通过 Wayland socket 设置 gamma，不需要额外设备权限。
+Wayvnc 不写入 Wayland socket 目录，因此只读挂载足够。它需要写入控制 socket，使用 `/tmp` 的 tmpfs。音频通过同一挂载中的 PulseAudio socket 采集；防窥通过 Wayland socket 设置 gamma，不需要额外设备权限。Power Lock 也通过只读挂载中的 niri IPC socket 发送请求，锁屏命令由宿主机的 niri 会话执行，容器内不需要 logind 或锁屏器。
 
 ## 本地开发
 
@@ -193,7 +196,7 @@ bin/niridesk
 
 ### 测试
 
-- Go 单元测试覆盖登录会话、限流、配置校验、wayvnc 控制接口、音频帧协议、防窥 wire 协议和 WebSocket 代理。
+- Go 单元测试覆盖登录会话、限流、配置校验、wayvnc 控制接口、音频帧协议、防窥 wire 协议、Power Lock 触发与 niri IPC 请求序列，以及 WebSocket 代理。
 - 开发中已用真实 niri + wayvnc + headless Chrome 驱动验证登录、画布连接、桌面端/手机端布局、设置面板、输出切换与 wayvnc 崩溃重启；此浏览器脚本依赖本机 Chrome/CDP，未作为公开测试入口提交。
 - 音频已在容器内用真实 PulseAudio/PipeWire 验证采集、WebSocket 帧时间戳和非静音内容；防窥已通过 DRM `GAMMA_LUT` 读回验证全零、远程输入后保持全零、关闭后恢复。
 - 当前验证环境：niri 26.04、wayvnc 0.9.1、Debian trixie、Chrome 156。
@@ -250,6 +253,16 @@ docker exec niridesk parec --raw --format=s16le --rate=48000 --channels=2 --devi
 
 防窥依赖 Wayland gamma control。运行 `wayland-info | grep gamma` 确认存在 `zwlr_gamma_control_manager_v1`。其他合成器或远程/无头环境可能不提供该协议。开启后应在物理显示器上看到全黑，但远程画面保持正常。
 
+**Power Lock 开关不可用或没有锁屏**
+
+确认容器内能看到 niri IPC socket：
+
+```bash
+docker exec niridesk sh -c 'ls -l "$XDG_RUNTIME_DIR"/niri.*.sock'
+```
+
+如果没有输出，检查 `.env` 中的 `XDG_RUNTIME_DIR` 与 `WAYLAND_DISPLAY` 是否对应正在运行的 niri 会话。宿主机上执行 `loginctl lock-session` 应立即启动锁屏界面；若没有反应，安装并在当前 niri 会话中启动支持 logind 的锁屏器（例如 DMS 或 swaylock）。Power Lock 锁定的是整个宿主机会话，重新连接后需要输入宿主机密码解锁。
+
 **输入法输入中文无效**
 
 手机端隐藏输入框会把 IME 完成的字符以 Unicode keysym 发送；部分远处的应用/输入法组合可能不接受这种注入。可改用物理键盘、在远端启用输入法，或通过剪贴板传递文本。
@@ -264,6 +277,7 @@ iOS Safari 对元素全屏支持有限；添加到主屏幕后以独立窗口运
 - 音频使用未压缩 48 kHz 立体声 PCM，约 1.5 Mbps/观看者，尚未使用 Opus 等压缩编码。
 - 音画同步需要手动调节延迟；VNC 没有可用的逐帧时间戳，无法自动做口型对齐。
 - 防窥依赖合成器的 `wlr-gamma-control`；不支持该协议的合成器无法启用。远程输入不会清除 gamma，但进程崩溃时由合成器在连接断开后自动恢复。
+- Power Lock 依赖 niri IPC 与宿主机上支持 logind 的锁屏器；没有锁屏器时开关可能显示不可用，锁定也可能只有显示器关闭而没有密码保护。锁定后重新连接需要先在宿主机解锁。开关保存在服务进程内，容器重启后恢复关闭。
 - 无文件传输、多用户账号或录制。
 - 画面经 VNC/RFB 传输，不是为高帧率游戏设计的协议；局域网办公体验良好，公网高延迟下建议降低画质与帧率。
 - 依赖 niri 提供的 screencopy、virtual pointer/keyboard 与 wayvnc 控制接口；其他 Wayland 合成器可能可用但未验证。
